@@ -5,14 +5,16 @@ import re
 import locale
 import datetime
 import uuid
+import os.path
+import sys
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # This file parses drugs from the  FDA's National Drug Code directory into a JSON file containing FHIR-formatted equivalents
 # Though the use of RxNorm as a reference database is not essential here, it positions the script to support additional coding systems in the future
 #
 # Dependencies:
-# 1. NDCD's product.txt file at /src-data/ndc/product.txt (http://www.fda.gov/drugs/informationondrugs/ucm142438.htm)
-# 2. RxNORM's RXNCONSO.RRF file at /src-data/rxnorm/rrf/RXNCONSO.RRF (http://www.nlm.nih.gov/research/umls/rxnorm/docs/rxnormfiles.html)
+# 1. NDCD's product.txt file at /data/ndc/product.txt (http://www.fda.gov/drugs/informationondrugs/ucm142438.htm)
+# 2. RxNORM's RXNCONSO.RRF file at /data/rxnorm/rrf/RXNCONSO.RRF (http://www.nlm.nih.gov/research/umls/rxnorm/docs/rxnormfiles.html)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # get script start for calculating execution time
@@ -177,8 +179,13 @@ organization_dict = {}
 numlines = 0
 
 # parse supported sources from RxNORM database
-input = open("data/rxnorm/rrf/RXNCONSO.RRF","r")
-
+try:
+	input = open("data/rxnorm/rrf/RXNCONSO.RRF","r")
+except IOError:
+	print "Error finding `data/rxnorm/rrf/RXNCONSO.RRF`"
+	print "Please download RxNorm database to `data/rxnorm/` from http://www.nlm.nih.gov/research/umls/rxnorm/docs/rxnormfiles.html"
+	sys.exit()
+	
 for line in input.readlines():
 	
 	d = line.split("|")
@@ -193,7 +200,12 @@ for line in input.readlines():
 print "Parsed " + locale.format('%d',numlines,grouping=True) + " codes from RxNORM database..."
 
 # begin parsing NDC product database
-input = open("data/ndc/product.txt","r")
+try:
+	input = open("data/ndc/product.txt","r")
+except IOError:
+	print "Error finding `data/ndc/product.txt`"
+	print "Please download National Drug Code Directory to `data/ndc/` from http://www.fda.gov/drugs/informationondrugs/ucm142438.htm"
+	sys.exit()
 
 output_medications = open("medication","w")
 output_organizations = open("organization","w")
@@ -237,28 +249,31 @@ for l in range(numlines):
 		code_code = ndc
 		code_system = system_dict[ndc]
 		
-		form_code = snomed_dosage_codes[dosage_form] if dosage_form in snomed_dosage_codes and len(snomed_dosage_codes[dosage_form]) > 0 else {}
+		form_code = snomed_dosage_codes[dosage_form] if dosage_form in snomed_dosage_codes else {}
 		
 		# build full name
-		name_parts = [proprietary_name]
+		name = proprietary_name
+		name_parts = []
 		
-		if proprietary_name_suffix is not None: 
+		if proprietary_name_suffix: 
 			name_parts.append( proprietary_name_suffix )
 		
-		if route is not None: 
+		if route: 
 			name_parts.append( route )
 		
-		name_full = ", ".join(name_parts)
+		name_full = name 
+		if len(name_parts)>0:
+			name_full = name + "(" + ") (".join(name_parts) + ")"
 		
 		# TODO: how can we figure out what's a "brand"?
 		d = { 'code': code_code, 'form_code': form_code, 'is_brand': True,'name_full': name_full }
 		
-		name = {"value":name_full}
+		name = {"value":name}
 		text = {"status": { "value":"generated" }, "div": "<div>" + name_full + "</div>"}
-		code = {"coding": [ {"system":{"value":code_system},"code":{"value":code_code},"display":{"value":name_full}}]}
+		code = {"coding": [ {"system":{"value":code_system},"code":{"value":code_code},"display":{"value":proprietary_name}}]}
 		isBrand = {"value": d['is_brand']}
 		kind = {"value": "product"}
-		product = {"form":{"coding":[{"system":"http://snomed.info/id","code":{"value":form_code},"display":{"value":name_full}}]}} #if len(d['form_code']) is not 0 else {}
+		product = {"form":{"coding":[{"system":"http://snomed.info/id","code":{"value":form_code},"display":{"value":dosage_form}}]}} #if len(d['form_code']) is not 0 else {}
 		
 		utcnow = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 		
@@ -281,6 +296,9 @@ for l in range(numlines):
 			
 			for i in range(len(active_ingredients)):
 				
+				if not active_ingredients[i]:
+					continue
+					
 				i_id = uuid.uuid1()
 				i_name = {"value":active_ingredients[i]}
 				
@@ -288,12 +306,32 @@ for l in range(numlines):
 					i_text = {"status": { "value":"generated" }, "div": "<div>" + active_ingredients[i] + "</div>"}
 					i_quantity = {"value":active_ingredient_strengths[i],"units":active_ingredient_units[i],"system":"http://unitsofmeasure.org"}
 					i_content = {"Substance":{"text":i_text,"name":i_name,"quantity":i_quantity}}
-				
+					
 					substances.append( {"title":"Substance Version \"1\"","id":str(i_id),"updated":utcnow,"published":utcnow,"author":[{"name":""}],"content":i_content} )
 					
 					substances_dict[active_ingredients[i]] = 1
 				
-				ingredients.append( {"item":{"type":"Substance","reference":"substance/@"+str(i_id),"display":i_name} } )
+				n = active_ingredient_units[i].split("/")
+				
+				numerator_val = active_ingredient_strengths[i]
+				numerator_units = n[0]
+				
+				denominator_parts = re.search( '(\d*)(\w*)', n[1] )
+				denominator_val = denominator_parts.group(1) if denominator_parts.group(1) else 1
+				denominator_units = denominator_parts.group(2) if denominator_parts.group(2) else ""
+				
+				numerator = {"value":{"value":numerator_val},"units":{"value":numerator_units},"system":{"value":"http://unitsofmeasure.org"},"code":{"value":numerator_units}}
+				denominator = {"value":{"value":denominator_val}}
+				
+				if denominator_units and denominator_parts.group(1) == 1:
+					denominator_units = dosage_form
+				
+				if denominator_units:
+					denominator["units"]  = {"value":denominator_units}
+					denominator["system"]  = {"value":"http://unitsofmeasure.org"}
+					denominator["code"]  = {"value":denominator_units}
+				
+				ingredients.append( {"item":{"type":"Substance","reference":{"value":"substance/@"+str(i_id)},"display":{"value":i_name}},"amount":{"numerator":numerator,"denominator":denominator} } )
 			
 			if len(ingredients)>0:
 				product['ingredient'] = ingredients
