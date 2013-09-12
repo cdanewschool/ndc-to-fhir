@@ -268,12 +268,13 @@ for l in range(numlines):
 		# TODO: how can we figure out what's a "brand"?
 		d = { 'code': code_code, 'form_code': form_code, 'is_brand': True,'name_full': name_full }
 		
+		id = uuid.uuid1()
 		name = {"value":name}
 		text = {"status": { "value":"generated" }, "div": "<div>" + name_full + "</div>"}
-		code = {"coding": [ {"system":{"value":code_system},"code":{"value":code_code},"display":{"value":proprietary_name}}]}
+		code = {"coding": [ {"system":{"value":code_system},"code":{"value":code_code},"display":{"value":nonproprietary_name}}]}
 		isBrand = {"value": d['is_brand']}
 		kind = {"value": "product"}
-		product = {"form":{"coding":[{"system":"http://snomed.info/id","code":{"value":form_code},"display":{"value":dosage_form}}]}} #if len(d['form_code']) is not 0 else {}
+		product = {"form":{"coding":[{"system":{"value":"http://snomed.info/id"},"code":{"value":form_code},"display":{"value":dosage_form}}]}} #if len(d['form_code']) is not 0 else {}
 		
 		utcnow = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 		
@@ -316,7 +317,7 @@ for l in range(numlines):
 				numerator_val = active_ingredient_strengths[i]
 				numerator_units = n[0]
 				
-				denominator_parts = re.search( '(\d*)(\w*)', n[1] )
+				denominator_parts = re.search( '([\d\.]*)(\w*)', n[1] )
 				denominator_val = denominator_parts.group(1) if denominator_parts.group(1) else 1
 				denominator_units = denominator_parts.group(2) if denominator_parts.group(2) else ""
 				
@@ -339,7 +340,7 @@ for l in range(numlines):
 		content = {"Medication":{"text":text,"name":name,"code":code,"isBrand":isBrand,"kind": kind,"product":product}}
 		
 		#TODO: title, id, author name,
-		medications.append( {"title":"Medication Version \"1\"","id":"","updated":utcnow,"published":utcnow,"author":[{"name":""}],"content":content} )
+		medications.append( {"title":"Medication Version \"1\"","id":str(id),"updated":utcnow,"published":utcnow,"author":[{"name":""}],"content":content} )
 
 input.close()
 
