@@ -255,6 +255,9 @@ for l in range(numlines):
 		name = proprietary_name
 		name_parts = []
 		
+		if nonproprietary_name: 
+			name_parts.append( nonproprietary_name )
+			
 		if proprietary_name_suffix: 
 			name_parts.append( proprietary_name_suffix )
 		
