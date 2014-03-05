@@ -10,22 +10,16 @@ import sys
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # This file parses drugs from the  FDA's National Drug Code directory into a JSON file containing FHIR-formatted equivalents
-# Though the use of RxNorm as a reference database is not essential here, it positions the script to support additional coding systems in the future
 #
 # Dependencies:
 # 1. NDCD's product.txt file at /data/ndc/product.txt (http://www.fda.gov/drugs/informationondrugs/ucm142438.htm)
-# 2. RxNORM's RXNCONSO.RRF file at /data/rxnorm/rrf/RXNCONSO.RRF (http://www.nlm.nih.gov/research/umls/rxnorm/docs/rxnormfiles.html)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # get script start for calculating execution time
 start = datetime.datetime.now()
 
 # set locale for output number formatting
-locale.setlocale(locale.LC_ALL, 'en_US.utf8')
-
-# configure supported coding systems 
-# (key should match a source vocabularly listed at http://www.nlm.nih.gov/research/umls/rxnorm/docs/2013/rxnorm_doco_full_2013-3.html#s3_0)
-supported_sources = dict([("MTHSPL","http://www.fda.gov")]) #("SNOMEDCT_US","http://snomed.info/id")
+locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
 
 # mapping of NDC dosage codes to snomed ids
 # TODO: verify these are coded correctly, fill in missing values
@@ -173,31 +167,7 @@ organizations = []
 substances = []
 
 substances_dict = {}
-system_dict = {}
 organization_dict = {}
-
-numlines = 0
-
-# parse supported sources from RxNORM database
-try:
-	input = open("data/rxnorm/rrf/RXNCONSO.RRF","r")
-except IOError:
-	print "Error finding `data/rxnorm/rrf/RXNCONSO.RRF`"
-	print "Please download RxNorm database to `data/rxnorm/` from http://www.nlm.nih.gov/research/umls/rxnorm/docs/rxnormfiles.html"
-	sys.exit()
-	
-for line in input.readlines():
-	
-	d = line.split("|")
-	system = d[11]
-	
-	# if source is supported
-	if system in supported_sources:
-		code = d[13]
-		system_dict[code] = supported_sources[system]
-		numlines+=1
-
-print "Parsed " + locale.format('%d',numlines,grouping=True) + " codes from RxNORM database..."
 
 # begin parsing NDC product database
 try:
@@ -213,7 +183,6 @@ output_substances = open("substance","w")
 
 lines = input.readlines()
 numlines = len(lines)
-#numlines = 20
 
 print "Parsing " + locale.format('%d',numlines,grouping=True) + " drugs from NDC database..."
 
@@ -229,121 +198,116 @@ for l in range(numlines):
 	
 	d = line.split("\t")
 	
-	ndc = d[1]
+	id = d[0]
+	type = d[2]
+	proprietary_name = d[3]
+	proprietary_name_suffix = d[4]
+	nonproprietary_name = d[5]
+	dosage_form = d[6] 
+	route = d[7]
+	label = d[12]
+	active_ingredients = d[13].split("; ")
+	active_ingredient_strengths = d[14].split("; ")
+	active_ingredient_units = d[15].split("; ")
 	
-	# is source is supported
-	if ndc in system_dict:
+	code_code = d[1]
+	code_system = "http://www.fda.gov"
+	
+	form_code = snomed_dosage_codes[dosage_form] if dosage_form in snomed_dosage_codes else {}
+	
+	# build full name
+	name = proprietary_name
+	name_parts = []
+	
+	if nonproprietary_name: 
+		name_parts.append( nonproprietary_name )
 		
-		id = d[0]
-		type = d[2]
-		proprietary_name = d[3]
-		proprietary_name_suffix = d[4]
-		nonproprietary_name = d[5]
-		dosage_form = d[6] 
-		route = d[7]
-		label = d[12]
-		active_ingredients = d[13].split("; ")
-		active_ingredient_strengths = d[14].split("; ")
-		active_ingredient_units = d[15].split("; ")
+	if proprietary_name_suffix: 
+		name_parts.append( proprietary_name_suffix )
+	
+	if route: 
+		name_parts.append( route )
+	
+	name_full = name 
+	if len(name_parts)>0:
+		name_full = name + "(" + ") (".join(name_parts) + ")"
+	
+	# TODO: how can we figure out what's a "brand"?
+	d = { 'code': code_code, 'form_code': form_code, 'is_brand': True,'name_full': name_full }
+	
+	id = uuid.uuid1()
+	name = {"value":name}
+	text = {"status": { "value":"generated" }, "div": "<div>" + name_full + "</div>"}
+	code = {"coding": [ {"system":{"value":code_system},"code":{"value":code_code},"display":{"value":nonproprietary_name}}]}
+	isBrand = {"value": d['is_brand']}
+	kind = {"value": "product"}
+	product = {"form":{"coding":[{"system":{"value":"http://snomed.info/id"},"code":{"value":form_code},"display":{"value":dosage_form}}]}} #if len(d['form_code']) is not 0 else {}
+	
+	utcnow = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+	
+	# add record for organization
+	# TODO: test for duplicates
+	if label not in organization_dict:
+		o_id = uuid.uuid1()
+		o_name = {"value":label}
+		o_text = {"status": { "value":"generated" }, "div": "<div>" + label + "</div>"}
+		o_content = {"Organization":{"text":o_text,"name":o_name}}
+		organizations.append( {"title":"Organization Version \"1\"","id":str(o_id),"updated":utcnow,"published":utcnow,"author":[{"name":""}],"content":o_content} )
 		
-		code_code = ndc
-		code_system = system_dict[ndc]
+		organization_dict[label] = 1
+	
+	# parse ingredients
+	ingredients = []
+	
+	# make sure components of ingredient detail match up
+	if len(active_ingredients) == len(active_ingredient_strengths) and len(active_ingredients) == len(active_ingredient_units):
 		
-		form_code = snomed_dosage_codes[dosage_form] if dosage_form in snomed_dosage_codes else {}
-		
-		# build full name
-		name = proprietary_name
-		name_parts = []
-		
-		if nonproprietary_name: 
-			name_parts.append( nonproprietary_name )
+		for i in range(len(active_ingredients)):
 			
-		if proprietary_name_suffix: 
-			name_parts.append( proprietary_name_suffix )
-		
-		if route: 
-			name_parts.append( route )
-		
-		name_full = name 
-		if len(name_parts)>0:
-			name_full = name + "(" + ") (".join(name_parts) + ")"
-		
-		# TODO: how can we figure out what's a "brand"?
-		d = { 'code': code_code, 'form_code': form_code, 'is_brand': True,'name_full': name_full }
-		
-		id = uuid.uuid1()
-		name = {"value":name}
-		text = {"status": { "value":"generated" }, "div": "<div>" + name_full + "</div>"}
-		code = {"coding": [ {"system":{"value":code_system},"code":{"value":code_code},"display":{"value":nonproprietary_name}}]}
-		isBrand = {"value": d['is_brand']}
-		kind = {"value": "product"}
-		product = {"form":{"coding":[{"system":{"value":"http://snomed.info/id"},"code":{"value":form_code},"display":{"value":dosage_form}}]}} #if len(d['form_code']) is not 0 else {}
-		
-		utcnow = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-		
-		# add record for organization
-		# TODO: test for duplicates
-		if label not in organization_dict:
-			o_id = uuid.uuid1()
-			o_name = {"value":label}
-			o_text = {"status": { "value":"generated" }, "div": "<div>" + label + "</div>"}
-			o_content = {"Organization":{"text":o_text,"name":o_name}}
-			organizations.append( {"title":"Organization Version \"1\"","id":str(o_id),"updated":utcnow,"published":utcnow,"author":[{"name":""}],"content":o_content} )
+			if not active_ingredients[i]:
+				continue
+				
+			i_id = uuid.uuid1()
+			i_name = {"value":active_ingredients[i]}
 			
-			organization_dict[label] = 1
-		
-		# parse ingredients
-		ingredients = []
-		
-		# make sure components of ingredient detail match up
-		if len(active_ingredients) == len(active_ingredient_strengths) and len(active_ingredients) == len(active_ingredient_units):
+			if active_ingredients[i] not in substances_dict:
+				i_text = {"status": { "value":"generated" }, "div": "<div>" + active_ingredients[i] + "</div>"}
+				i_quantity = {"value":active_ingredient_strengths[i],"units":active_ingredient_units[i],"system":"http://unitsofmeasure.org"}
+				i_content = {"Substance":{"text":i_text,"name":i_name,"quantity":i_quantity}}
+				
+				substances.append( {"title":"Substance Version \"1\"","id":str(i_id),"updated":utcnow,"published":utcnow,"author":[{"name":""}],"content":i_content} )
+				
+				substances_dict[active_ingredients[i]] = 1
 			
-			for i in range(len(active_ingredients)):
-				
-				if not active_ingredients[i]:
-					continue
-					
-				i_id = uuid.uuid1()
-				i_name = {"value":active_ingredients[i]}
-				
-				if active_ingredients[i] not in substances_dict:
-					i_text = {"status": { "value":"generated" }, "div": "<div>" + active_ingredients[i] + "</div>"}
-					i_quantity = {"value":active_ingredient_strengths[i],"units":active_ingredient_units[i],"system":"http://unitsofmeasure.org"}
-					i_content = {"Substance":{"text":i_text,"name":i_name,"quantity":i_quantity}}
-					
-					substances.append( {"title":"Substance Version \"1\"","id":str(i_id),"updated":utcnow,"published":utcnow,"author":[{"name":""}],"content":i_content} )
-					
-					substances_dict[active_ingredients[i]] = 1
-				
-				n = active_ingredient_units[i].split("/")
-				
-				numerator_val = active_ingredient_strengths[i]
-				numerator_units = n[0]
-				
-				denominator_parts = re.search( '([\d\.]*)(\w*)', n[1] )
-				denominator_val = denominator_parts.group(1) if denominator_parts.group(1) else 1
-				denominator_units = denominator_parts.group(2) if denominator_parts.group(2) else ""
-				
-				numerator = {"value":{"value":numerator_val},"units":{"value":numerator_units},"system":{"value":"http://unitsofmeasure.org"},"code":{"value":numerator_units}}
-				denominator = {"value":{"value":denominator_val}}
-				
-				if denominator_units and denominator_parts.group(1) == 1:
-					denominator_units = dosage_form
-				
-				if denominator_units:
-					denominator["units"]  = {"value":denominator_units}
-					denominator["system"]  = {"value":"http://unitsofmeasure.org"}
-					denominator["code"]  = {"value":denominator_units}
-				
-				ingredients.append( {"item":{"type":"Substance","reference":{"value":"substance/@"+str(i_id)},"display":{"value":i_name}},"amount":{"numerator":numerator,"denominator":denominator} } )
+			n = active_ingredient_units[i].split("/")
 			
-			if len(ingredients)>0:
-				product['ingredient'] = ingredients
+			numerator_val = active_ingredient_strengths[i]
+			numerator_units = n[0]
 			
-		content = {"Medication":{"text":text,"name":name,"code":code,"isBrand":isBrand,"kind": kind,"product":product}}
+			denominator_parts = re.search( '([\d\.]*)(\w*)', n[1] )
+			denominator_val = denominator_parts.group(1) if denominator_parts.group(1) else 1
+			denominator_units = denominator_parts.group(2) if denominator_parts.group(2) else ""
+			
+			numerator = {"value":{"value":numerator_val},"units":{"value":numerator_units},"system":{"value":"http://unitsofmeasure.org"},"code":{"value":numerator_units}}
+			denominator = {"value":{"value":denominator_val}}
+			
+			if denominator_units and denominator_parts.group(1) == 1:
+				denominator_units = dosage_form
+			
+			if denominator_units:
+				denominator["units"]  = {"value":denominator_units}
+				denominator["system"]  = {"value":"http://unitsofmeasure.org"}
+				denominator["code"]  = {"value":denominator_units}
+			
+			ingredients.append( {"item":{"type":"Substance","reference":{"value":"substance/@"+str(i_id)},"display":{"value":i_name}},"amount":{"numerator":numerator,"denominator":denominator} } )
 		
-		#TODO: title, id, author name,
-		medications.append( {"title":"Medication Version \"1\"","id":str(id),"updated":utcnow,"published":utcnow,"author":[{"name":""}],"content":content} )
+		if len(ingredients)>0:
+			product['ingredient'] = ingredients
+		
+	content = {"Medication":{"text":text,"name":name,"code":code,"isBrand":isBrand,"kind": kind,"product":product}}
+	
+	#TODO: title, id, author name,
+	medications.append( {"title":"Medication Version \"1\"","id":str(id),"updated":utcnow,"published":utcnow,"author":[{"name":""}],"content":content} )
 
 input.close()
 
